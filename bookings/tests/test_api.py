@@ -78,6 +78,10 @@ class BookingAPITests(TestCase):
             Decimal(response.data["total_price"]),
             Decimal("998.00"),
         )
+        self.assertEqual(
+            response.data["status"],
+            Booking.Status.PENDING,
+        )
 
         self.ticket_tier.refresh_from_db()
         self.assertEqual(self.ticket_tier.available_seats, 8)
@@ -143,5 +147,70 @@ class BookingAPITests(TestCase):
         booking.refresh_from_db()
         self.assertEqual(
             booking.status,
-            Booking.Status.CONFIRMED,
+            Booking.Status.PENDING,
         )
+
+
+    def test_attendee_can_confirm_payment(self):
+        booking_response = self.client.post(
+            self.url,
+            {
+                "ticket_tier": self.ticket_tier.id,
+                "quantity": 2,
+            },
+            format="json",
+        )
+        self.assertEqual(booking_response.status_code, 201)
+
+        booking_id = booking_response.data["id"]
+
+        payment_response = self.client.post(
+            f"/api/bookings/{booking_id}/confirm-payment/",
+            format="json",
+        )
+
+        self.assertEqual(payment_response.status_code, 200)
+
+        booking = Booking.objects.get(id=booking_id)
+        self.assertEqual(booking.status, Booking.Status.CONFIRMED)
+
+    def test_expired_booking_cannot_be_paid(self):
+        booking_response = self.client.post(
+            self.url,
+            {
+                "ticket_tier": self.ticket_tier.id,
+                "quantity": 1,
+            },
+            format="json",
+        )
+        self.assertEqual(booking_response.status_code, 201)
+
+        booking = Booking.objects.get(id=booking_response.data["id"])
+        booking.payment_deadline = timezone.now() - timedelta(minutes=1)
+        booking.save(update_fields=["payment_deadline"])
+
+        payment_response = self.client.post(
+            f"/api/bookings/{booking.id}/confirm-payment/",
+            format="json",
+        )
+
+        self.assertEqual(payment_response.status_code, 400)
+
+    def test_another_user_cannot_confirm_payment(self):
+        booking = Booking.objects.create(
+            user=self.other_attendee,
+            ticket_tier=self.ticket_tier,
+            quantity=1,
+            total_price=Decimal("499.00"),
+            payment_deadline=timezone.now() + timedelta(minutes=10),
+        )
+
+        payment_response = self.client.post(
+            f"/api/bookings/{booking.id}/confirm-payment/",
+            format="json",
+        )
+
+        self.assertEqual(payment_response.status_code, 404)
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.status, Booking.Status.PENDING)

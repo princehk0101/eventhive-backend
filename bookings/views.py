@@ -1,6 +1,9 @@
 
+from datetime import timedelta
+
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -58,11 +61,7 @@ class BookingListCreateView(generics.ListCreateAPIView):
 
             if ticket_tier.event.organizer_id == request.user.id:
                 return Response(
-                    {
-                        "error": (
-                            "Organizers cannot book tickets for their own event."
-                        )
-                    },
+                    {"error": "Organizers cannot book tickets for their own event."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
@@ -72,30 +71,69 @@ class BookingListCreateView(generics.ListCreateAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            total_price = ticket_tier.price * quantity
-
             booking = Booking.objects.create(
                 user=request.user,
                 ticket_tier=ticket_tier,
                 quantity=quantity,
-                total_price=total_price,
-                status=Booking.Status.CONFIRMED,
+                total_price=ticket_tier.price * quantity,
+                status=Booking.Status.PENDING,
+                payment_deadline=timezone.now() + timedelta(minutes=10),
             )
 
             ticket_tier.available_seats -= quantity
             ticket_tier.save(update_fields=["available_seats"])
 
-        # Queue the email task only after the database transaction commits.
-        transaction.on_commit(
-            lambda booking_id=booking.id: (
-                send_booking_confirmation_email.delay(booking_id)
-            )
-        )
-
         serializer = self.get_serializer(booking)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class BookingPaymentConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        with transaction.atomic():
+            booking = get_object_or_404(
+                Booking.objects.select_for_update(),
+                pk=pk,
+                user=request.user,
+            )
+
+            if booking.status == Booking.Status.CONFIRMED:
+                return Response(
+                    {"message": "Payment is already confirmed.", "booking_id": booking.id},
+                    status=status.HTTP_200_OK,
+                )
+
+            if booking.status != Booking.Status.PENDING:
+                return Response(
+                    {"error": "This booking cannot be paid."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if (
+                booking.payment_deadline is None
+                or timezone.now() >= booking.payment_deadline
+            ):
+                return Response(
+                    {"error": "Payment deadline has passed. Booking will expire."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            booking.status = Booking.Status.CONFIRMED
+            booking.save(update_fields=["status"])
+
+            transaction.on_commit(
+                lambda booking_id=booking.id:
+                    send_booking_confirmation_email.delay(booking_id)
+            )
+
         return Response(
-            serializer.data,
-            status=status.HTTP_201_CREATED,
+            {
+                "message": "Mock payment successful.",
+                "booking_id": booking.id,
+                "status": booking.status,
+            },
+            status=status.HTTP_200_OK,
         )
 
 
@@ -116,13 +154,42 @@ class BookingCancelView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            ticket_tier = get_object_or_404(
-                TicketTier.objects.select_for_update(),
-                pk=booking.ticket_tier_id,
-            )
+            if booking.status in (
+                Booking.Status.EXPIRED,
+                Booking.Status.PENDING,
+            ):
+                # Pending bookings have already reserved seats.
+                # Release them here only when the booking is still pending.
+                if booking.status == Booking.Status.PENDING:
+                    tier = TicketTier.objects.select_for_update().get(
+                        pk=booking.ticket_tier_id
+                    )
+                    tier.available_seats = min(
+                        tier.total_seats,
+                        tier.available_seats + booking.quantity,
+                    )
+                    tier.save(update_fields=["available_seats"])
 
-            ticket_tier.available_seats += booking.quantity
-            ticket_tier.save(update_fields=["available_seats"])
+                booking.status = Booking.Status.CANCELLED
+                booking.save(update_fields=["status"])
+
+                return Response(
+                    {
+                        "message": "Booking cancelled successfully.",
+                        "booking_id": booking.id,
+                        "status": booking.status,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            tier = TicketTier.objects.select_for_update().get(
+                pk=booking.ticket_tier_id
+            )
+            tier.available_seats = min(
+                tier.total_seats,
+                tier.available_seats + booking.quantity,
+            )
+            tier.save(update_fields=["available_seats"])
 
             booking.status = Booking.Status.CANCELLED
             booking.save(update_fields=["status"])
@@ -132,7 +199,7 @@ class BookingCancelView(APIView):
                 "message": "Booking cancelled successfully.",
                 "booking_id": booking.id,
                 "status": booking.status,
-                "available_seats": ticket_tier.available_seats,
+                "available_seats": tier.available_seats,
             },
             status=status.HTTP_200_OK,
         )

@@ -59,7 +59,7 @@ class BookingModelTests(TestCase):
 
         self.assertEqual(booking.quantity, 2)
         self.assertEqual(booking.total_price, Decimal("998.00"))
-        self.assertEqual(booking.status, Booking.Status.CONFIRMED)
+        self.assertEqual(booking.status, Booking.Status.PENDING)
 
     def test_booking_belongs_to_attendee(self):
         booking = Booking.objects.create(
