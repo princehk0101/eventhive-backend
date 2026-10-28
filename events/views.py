@@ -1,4 +1,5 @@
 
+from django.core.cache import cache
 from django.shortcuts import get_object_or_404
 
 from rest_framework import generics, status
@@ -15,9 +16,12 @@ from .models import Event, TicketTier
 from .serializers import EventSerializer, TicketTierSerializer
 
 
+# Clear cached public event listings
+def clear_public_event_cache():
+    cache.delete_pattern("public_events:*")
+
 
 # Event List and Create
-
 class EventListCreateView(generics.ListCreateAPIView):
     serializer_class = EventSerializer
 
@@ -41,6 +45,24 @@ class EventListCreateView(generics.ListCreateAPIView):
             return [IsAuthenticated()]
         return [AllowAny()]
 
+    def list(self, request, *args, **kwargs):
+        # Cache only anonymous public GET requests.
+        if request.user.is_authenticated:
+            return super().list(request, *args, **kwargs)
+
+        cache_key = f"public_events:{request.get_full_path()}"
+        cached_data = cache.get(cache_key)
+
+        if cached_data is not None:
+            return Response(cached_data)
+
+        response = super().list(request, *args, **kwargs)
+
+        if response.status_code == status.HTTP_200_OK:
+            cache.set(cache_key, response.data, timeout=60)
+
+        return response
+
     def perform_create(self, serializer):
         user = self.request.user
 
@@ -50,11 +72,10 @@ class EventListCreateView(generics.ListCreateAPIView):
             )
 
         serializer.save(organizer=user)
-
+        clear_public_event_cache()
 
 
 # Event Retrieve, Update and Delete
-
 class EventDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = EventSerializer
 
@@ -88,6 +109,7 @@ class EventDetailView(generics.RetrieveUpdateDestroyAPIView):
             )
 
         serializer.save()
+        clear_public_event_cache()
 
     def perform_destroy(self, instance):
         user = self.request.user
@@ -98,11 +120,10 @@ class EventDetailView(generics.RetrieveUpdateDestroyAPIView):
             )
 
         instance.delete()
-
+        clear_public_event_cache()
 
 
 # Admin Event Approval / Rejection
-
 class EventApprovalView(APIView):
     permission_classes = [IsAuthenticated, IsAdminUser]
 
@@ -123,6 +144,7 @@ class EventApprovalView(APIView):
             event.status = Event.Status.REJECTED
 
         event.save(update_fields=["status"])
+        clear_public_event_cache()
 
         return Response(
             {
@@ -134,9 +156,7 @@ class EventApprovalView(APIView):
         )
 
 
-
 # Ticket Tier List and Create
-
 class TicketTierListCreateView(generics.ListCreateAPIView):
     serializer_class = TicketTierSerializer
     permission_classes = [IsAuthenticated]
@@ -166,3 +186,4 @@ class TicketTierListCreateView(generics.ListCreateAPIView):
             event=event,
             available_seats=serializer.validated_data["total_seats"],
         )
+        clear_public_event_cache()

@@ -1,6 +1,3 @@
-from django.shortcuts import render
-
-# Create your views here.
 
 from django.db import transaction
 from django.shortcuts import get_object_or_404
@@ -13,6 +10,7 @@ from rest_framework.views import APIView
 from events.models import TicketTier
 from .models import Booking
 from .serializers import BookingSerializer
+from .tasks import send_booking_confirmation_email
 
 
 class BookingListCreateView(generics.ListCreateAPIView):
@@ -48,8 +46,7 @@ class BookingListCreateView(generics.ListCreateAPIView):
 
         with transaction.atomic():
             ticket_tier = get_object_or_404(
-                TicketTier.objects.select_for_update()
-                .select_related("event"),
+                TicketTier.objects.select_for_update().select_related("event"),
                 pk=ticket_tier_id,
             )
 
@@ -61,7 +58,11 @@ class BookingListCreateView(generics.ListCreateAPIView):
 
             if ticket_tier.event.organizer_id == request.user.id:
                 return Response(
-                    {"error": "Organizers cannot book tickets for their own event."},
+                    {
+                        "error": (
+                            "Organizers cannot book tickets for their own event."
+                        )
+                    },
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
@@ -83,6 +84,13 @@ class BookingListCreateView(generics.ListCreateAPIView):
 
             ticket_tier.available_seats -= quantity
             ticket_tier.save(update_fields=["available_seats"])
+
+        # Queue the email task only after the database transaction commits.
+        transaction.on_commit(
+            lambda booking_id=booking.id: (
+                send_booking_confirmation_email.delay(booking_id)
+            )
+        )
 
         serializer = self.get_serializer(booking)
         return Response(
