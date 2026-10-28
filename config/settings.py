@@ -60,7 +60,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-# ---------- Database (PostgreSQL) ----------
+# ---------- Database (PostgreSQL) ----
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -72,7 +72,7 @@ DATABASES = {
     }
 }
 
-# ---------- Custom user ----------
+# ----- Custom user -----
 AUTH_USER_MODEL = "users.User"
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -90,7 +90,7 @@ USE_TZ = True
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# ---------- DRF ----------
+# ----DRF -----
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -132,11 +132,11 @@ CACHES = {
     }
 }
 
-# ---------- Celery ----------
+# ------ Celery --------
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_TIMEZONE = "UTC"
 
-# ---------- Email (console par print hoga) ----------
+# -------Email (console par print hoga) ---
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 DEFAULT_FROM_EMAIL = "noreply@eventhive.local"
