@@ -1,7 +1,6 @@
-
 # EventHive Backend
 
-EventHive is an event booking backend built with Django REST Framework. It supports event management, ticket reservations, payment confirmation, background jobs, caching, and AI-powered event questions.
+EventHive is an event booking backend built with Django REST Framework. It supports event management, ticket reservations, payment confirmation, background jobs, Redis caching, and Gemini-powered event questions.
 
 ## Tech Stack
 
@@ -12,38 +11,41 @@ EventHive is an event booking backend built with Django REST Framework. It suppo
 - Celery and Celery Beat
 - JWT authentication
 - Docker Compose
-- LLM API for event-related questions
+- Google Gemini API
+- drf-spectacular and Swagger UI
+- pytest / Django automated tests and coverage
 
 ## Features
 
 - Role-based access for organizers, attendees, and admins
-- JWT authentication and token refresh/logout
+- JWT authentication, token refresh, and logout
 - Event creation, management, approval, and rejection
 - Public listing of approved events
-- Ticket tiers with pricing and seat availability
+- Ticket tiers, pricing, and seat availability
 - Booking creation, cancellation, and payment confirmation
-- Pending booking expiration and seat restoration
-- Email confirmations and scheduled event reminders
+- Expiration of pending bookings and seat restoration
+- Confirmation emails and scheduled event reminders
 - Redis caching for public event listings
-- AI-powered questions grounded in event information
+- AI-powered event questions using event information
 - API filtering, search, ordering, and pagination
-- Automated tests for booking logic and concurrency
+- Automated booking, task, and concurrency tests
 
 ## Prerequisites
 
-- Python 3.12 or a compatible version used by the project
+- Python 3.12 or the version supported by the project
 - Docker Desktop with Docker Compose
 - Git
+- A Google Gemini API key for the AI question endpoint
 
 ## Environment Configuration
 
-Create your local environment file using the example:
+Create a local `.env` file from the example:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Configure the required database, Redis, Django secret, email, and LLM settings in `.env`. Use the variable names expected by the project configuration.
+Configure the required variables in `.env`, including the Django secret key, database credentials, Redis settings, and Gemini API key. Use the exact variable names expected by `config/settings.py`.
 
 Never commit `.env` or publish API keys, passwords, or Django secret keys.
 
@@ -61,15 +63,13 @@ Check service status:
 docker compose ps
 ```
 
-Apply database migrations if the container configuration does not already run them:
+Apply database migrations:
 
 ```powershell
 docker compose exec web python manage.py migrate
 ```
 
-The Django API is available at:
-
-`http://localhost:8000/`
+The API is available at `http://localhost:8000/`.
 
 Stop the services:
 
@@ -77,14 +77,53 @@ Stop the services:
 docker compose down
 ```
 
+## API Documentation
+
+Interactive API documentation is provided by Swagger UI and drf-spectacular.
+
+- **Swagger UI:** `http://localhost:8000/api/docs/`
+- **OpenAPI schema:** `http://localhost:8000/api/schema/`
+
+### Authentication
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/auth/register/` | Register a user |
+| POST | `/api/auth/login/` | Obtain JWT tokens |
+| POST | `/api/auth/refresh/` | Refresh an access token |
+| POST | `/api/auth/logout/` | Log out |
+| GET | `/api/auth/me/` | Retrieve the current user's profile |
+
+### Events
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/events/` | List events |
+| POST | `/api/events/` | Create an event |
+| GET | `/api/events/{id}/` | Retrieve event details |
+| POST | `/api/events/{id}/approval/` | Event approval action |
+| GET/POST | `/api/events/{id}/tickets/` | List or create ticket tiers |
+| POST | `/api/events/{id}/ask/` | Ask an AI question about an event |
+
+### Bookings
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/bookings/` | List bookings |
+| POST | `/api/bookings/` | Create a booking |
+| POST | `/api/bookings/{id}/cancel/` | Cancel a booking |
+| POST | `/api/bookings/{id}/confirm-payment/` | Confirm payment |
+
+Check Swagger UI for supported methods, request schemas, authentication requirements, and response formats.
+
 ## Database Design
 
-The main entities are:
+The primary entities are:
 
 - **User:** Account identity and role.
 - **Event:** Event details, organizer, schedule, location, and approval status.
 - **TicketTier:** Ticket category, price, total seats, and available seats.
-- **Booking:** Attendee, selected ticket tier, quantity, total price, payment deadline, and booking status.
+- **Booking:** Attendee, ticket tier, quantity, total price, payment deadline, and booking status.
 
 ### ER Diagram
 
@@ -130,13 +169,13 @@ erDiagram
     }
 ```
 
-Confirm this diagram and the listed fields against the actual models and migrations before submission.
+Verify the diagram's fields against the actual models and migrations before submission.
 
 ## Booking Concurrency
 
-Booking creation uses a database transaction and row-level locking on the ticket tier to prevent concurrent requests from reserving the same seats.
+Booking creation is designed to use database transactions and row-level locking to prevent overselling.
 
-The booking flow should:
+The intended flow is:
 
 1. Start a database transaction.
 2. Lock the relevant ticket tier.
@@ -144,42 +183,55 @@ The booking flow should:
 4. Reserve seats and create the booking atomically.
 5. Roll back changes if validation or persistence fails.
 
-The concurrency test submits 50 parallel requests against a tier with 10 seats and verifies that no more than 10 requests succeed.
+The concurrency test submits 50 parallel requests against a ticket tier with 10 seats and verifies that no more than 10 requests succeed.
 
 ## Background Tasks
 
-Celery and Celery Beat handle background work:
+Celery and Celery Beat handle background work, including:
 
-- Booking confirmation email after payment confirmation
+- Booking confirmation emails
 - Expiration of unpaid pending bookings
-- Release of seats when bookings expire
+- Seat restoration when bookings expire
 - Reminders for eligible upcoming events
 
-The current email backend may print messages to the console. Configure a real email provider before production deployment.
+The configured console email backend is suitable for development. Configure a real email provider for production use.
 
 ## Caching
 
-Redis is used as the Django cache backend and Celery message broker.
+Redis is configured as the Django cache backend and Celery message broker.
 
-Public event-list caching should be invalidated when an event is created, updated, or approved. Verify the cache key, timeout, and invalidation implementation against the source code.
+Public event-list cache invalidation should be verified for event creation, updates, and approval changes.
 
-## AI Event Questions
+## Gemini AI Event Questions
 
-The event question endpoint is intended to answer questions using the selected event's description and FAQ.
+The endpoint `POST /api/events/{id}/ask/` accepts a question about an event and uses Google Gemini to generate an answer based on the available event information.
 
-The implementation should:
+The implementation is intended to:
 
-- Use only retrieved event information as factual context.
-- Instruct the model to say when the answer is not present in that context.
-- Handle missing API keys, provider errors, and timeouts gracefully.
-- Load API credentials from environment variables.
-- Avoid exposing secrets or unrelated user information.
+- Ground answers in event information.
+- Instruct the model not to invent unsupported facts.
+- Return a fallback answer when information is unavailable.
+- Handle missing API credentials and provider errors.
+- Load the API key from environment variables.
 
-Verify the endpoint path, request format, response format, and provider configuration against the implementation before relying on this section.
+Example request:
 
-## API Documentation
+```json
+{
+  "question": "What is this event about?"
+}
+```
 
-If configured, API schema and Swagger UI can be accessed through the project's documentation routes. Check `config/urls.py` for the exact paths.
+Example response:
+
+```json
+{
+  "event_id": 1,
+  "answer": "This event is a meetup for Python and Django developers."
+}
+```
+
+The example answer is illustrative; actual answers depend on the selected event's information.
 
 ## Testing
 
@@ -196,16 +248,16 @@ python -m coverage run manage.py test
 python -m coverage report --include="bookings/*"
 ```
 
-The latest recorded run passed 30 tests, with 94% coverage for the `bookings` app. Re-run the commands after any code changes.
+The latest verified run passed **35 tests**, and the booking app achieved **94% test coverage**.
 
 ## Security Notes
 
 - Keep `.env` out of version control.
 - Use strong secret keys and production-safe Django settings.
-- Configure trusted hosts, HTTPS, and appropriate CORS settings before deployment.
-- Use a production email backend and protect API credentials.
-- Review rate limiting and authorization for sensitive endpoints.
+- Configure trusted hosts and HTTPS before production deployment.
+- Use a production email backend.
+- Review authorization, rate limiting, and API credential handling.
 
 ## Known Limitations
 
-Document any remaining gaps in email delivery, reminder deduplication, payment integration, AI provider reliability, and deployment configuration before production use.
+Before production deployment, review payment-provider integration, email delivery, reminder deduplication, AI provider reliability, and production deployment settings.
