@@ -6,6 +6,7 @@ from .views import (
     EventDetailView,
     EventApprovalView,
     TicketTierListCreateView,
+    EventAskView,
 )
 
 urlpatterns = [
@@ -20,5 +21,10 @@ urlpatterns = [
         "<int:event_id>/tickets/",
         TicketTierListCreateView.as_view(),
         name="ticket-tier-list-create",
+    ),
+    path(
+        "<int:pk>/ask/",
+        EventAskView.as_view(),
+        name="event-ask",
     ),
 ]

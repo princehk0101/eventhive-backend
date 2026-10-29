@@ -15,6 +15,10 @@ from .models import Event, TicketTier
 
 User = get_user_model()
 
+from unittest.mock import patch
+
+from django.test import override_settings
+
 
 class EventAPITests(APITestCase):
     @classmethod
@@ -295,4 +299,125 @@ class EventAPITests(APITestCase):
         self.assertEqual(
             response.status_code,
             status.HTTP_400_BAD_REQUEST,
+        )
+
+
+class EventAskAPITests(APITestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.organizer = User.objects.create_user(
+            username="ai_organizer",
+            email="ai_organizer@example.com",
+            password="TestPass123!",
+            role="organizer",
+        )
+
+        cls.event = Event.objects.create(
+            organizer=cls.organizer,
+            title="Python Developer Meetup",
+            description="A meetup for Python and Django developers.",
+            faq="The event covers Python and Django.",
+            city="Lucknow",
+            category="Technology",
+            start_time=timezone.now() + timedelta(days=30),
+            status=Event.Status.APPROVED,
+        )
+
+        cls.pending_event = Event.objects.create(
+            organizer=cls.organizer,
+            title="Pending Meetup",
+            description="This event is not yet approved.",
+            faq="",
+            city="Lucknow",
+            category="Technology",
+            start_time=timezone.now() + timedelta(days=31),
+            status=Event.Status.PENDING,
+        )
+
+    @override_settings(
+        GEMINI_API_KEY="test-api-key",
+        GEMINI_MODEL="gemini-3.5-flash-lite",
+    )
+    @patch("google.genai.Client")
+    def test_approved_event_returns_gemini_answer(self, mock_client_class):
+        mock_client = mock_client_class.return_value
+        mock_client.models.generate_content.return_value.text = (
+            "A meetup for Python and Django developers."
+        )
+
+        response = self.client.post(
+            reverse("event-ask", kwargs={"pk": self.event.pk}),
+            {"question": "What is this event about?"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["event_id"], self.event.pk)
+        self.assertEqual(
+            response.data["answer"],
+            "A meetup for Python and Django developers.",
+        )
+        mock_client.models.generate_content.assert_called_once()
+
+    @override_settings(GEMINI_API_KEY="")
+    def test_missing_api_key_returns_service_unavailable(self):
+        response = self.client.post(
+            reverse("event-ask", kwargs={"pk": self.event.pk}),
+            {"question": "What is this event about?"},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    def test_empty_question_returns_bad_request(self):
+        response = self.client.post(
+            reverse("event-ask", kwargs={"pk": self.event.pk}),
+            {"question": "   "},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_pending_event_returns_not_found(self):
+        response = self.client.post(
+            reverse("event-ask", kwargs={"pk": self.pending_event.pk}),
+            {"question": "What is this event about?"},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    @override_settings(
+        GEMINI_API_KEY="test-api-key",
+        GEMINI_MODEL="gemini-3.5-flash-lite",
+    )
+    @patch("google.genai.Client")
+    def test_gemini_error_returns_bad_gateway(self, mock_client_class):
+        mock_client = mock_client_class.return_value
+        mock_client.models.generate_content.side_effect = Exception(
+            "Simulated Gemini failure"
+        )
+
+        response = self.client.post(
+            reverse("event-ask", kwargs={"pk": self.event.pk}),
+            {"question": "What is this event about?"},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_502_BAD_GATEWAY,
+        )
+        self.assertEqual(
+            response.data["error"],
+            "Unable to answer this question right now.",
         )

@@ -203,3 +203,8 @@ CELERY_BEAT_SCHEDULE = {
 # Console backend prints emails in worker logs.
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 DEFAULT_FROM_EMAIL = "noreply@eventhive.local"
+
+
+#----- Gemini api key---
+GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
+GEMINI_MODEL = env("GEMINI_MODEL", default="gemini-3.5-flash-lite")
