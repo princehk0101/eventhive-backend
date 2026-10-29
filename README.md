@@ -2,6 +2,16 @@
 
 EventHive is an event booking backend built with Django REST Framework. It supports event management, ticket reservations, payment confirmation, background jobs, Redis caching, and Gemini-powered event questions.
 
+## 🔗 Live API Documentation
+
+**Swagger UI:** [Explore EventHive API](https://eventhive-backend-j9jn.onrender.com/api/docs/)
+
+**OpenAPI Schema:** [View API Schema](https://eventhive-backend-j9jn.onrender.com/api/schema/)
+
+**GitHub Repository:** [EventHive Backend](https://github.com/princehk0101/eventhive-backend)
+
+> Note: The free Render service may take some time to wake up after inactivity.
+
 ## Tech Stack
 
 - Python and Django
